@@ -1,6 +1,7 @@
 # Library
 import os
 from keepalive import keepalive
+import nacl
 import discord
 import asyncio
 from discord.ext import commands
