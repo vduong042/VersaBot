@@ -11,6 +11,7 @@ from tempfile import TemporaryFile
 from gtts import gTTS
 from collections import deque
 import ffmpeg
+from io import BytesIO
 
 # Setting up logging
 logging.basicConfig(filename='bot.log', level=logging.INFO)
@@ -101,43 +102,54 @@ async def stop(ctx):  # just an alias for leave
   await leave(ctx)
 
 
-@bot.command()
-async def s(ctx):
-  message_queue = deque([])
-  message = ctx.message.content[2:]
-  usernick = ctx.message.author.display_name
-  message = usernick + " says " + message
+# Initialize the queue to store messages to be spoken
+message_queue = deque([])
 
-  try:
-    vc = ctx.message.guild.voice_client
-    if not vc.is_playing():
-      tts = gTTS(message, lang='vi', slow=False)
-      f = TemporaryFile()
-      tts.write_to_fp(f)
-      f.seek(0)
-      vc.play(discord.FFmpegPCMAudio(f, pipe=True))
-    else:
-      message_queue.append(message)
-      while vc.is_playing():
-        await asyncio.sleep(0.1)
-      tts = gTTS(message_queue.popleft(), lang='vi', slow=False)
-      f = TemporaryFile()
-      tts.write_to_fp(f)
-      f.seek(0)
-      vc.play(discord.FFmpegPCMAudio(f, pipe=True))
-  except (TypeError, AttributeError):
-    try:
-      tts = gTTS(message, lang='vi', slow=False)
-      f = TemporaryFile()
-      tts.write_to_fp(f)
-      f.seek(0)
-      channel = ctx.message.author.voice.channel
-      vc = await channel.connect()
-      vc.play(discord.FFmpegPCMAudio(f, pipe=True))
-    except (AttributeError, TypeError):
-      await ctx.send("I'm not in a voice channel and neither are you!")
+
+# Text to Speech feature
+@bot.command()
+async def s(ctx, *arg):
+  user = ctx.message.author
+
+  if user.voice is None:
+    await ctx.send("You need to be in a voice channel to run this command!")
     return
-  f.close()
+
+  voice_channel = user.voice.channel
+  try:
+    vc = await voice_channel.connect()
+  except discord.errors.ClientException:
+    vc = ctx.voice_client
+
+  # If the bot is already playing, add the message to the queue
+  if vc.is_playing():
+    message_queue.append(" ".join(arg))
+    return
+
+  message_queue.append(" ".join(arg))
+
+  while message_queue:
+    text = message_queue.popleft()
+
+    tts = gTTS(text=text, lang='vi', slow=False)
+    tts_bytes_io = BytesIO()
+    tts.write_to_fp(tts_bytes_io)
+    tts_bytes_io.seek(0)
+
+    # Start playing the audio
+    vc.play(discord.FFmpegPCMAudio(tts_bytes_io, pipe=True),
+            after=lambda e: cleanup_temp_file(tts_bytes_io))
+    await asyncio.sleep(
+        1)  # Wait for a short duration before playing the next message
+
+
+# Function to clean up the temporary audio file
+async def cleanup_temp_file(tts_bytes_io):
+  try:
+    tts_bytes_io.close()
+  except Exception as e:
+    logging.info(f"Error closing BytesIO object: {e}")
+
 
 # Run the bot
 keepalive()
